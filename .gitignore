@@ -1,0 +1,5 @@
+.vscode
+.ipynb_checkpoints
+fits_to_evecs
+tests/test_runner
+.DS_Store
