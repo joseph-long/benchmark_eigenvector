@@ -21,9 +21,10 @@ void dd_debug(const char *fmt, ...) {
 }
 #endif
 
+// Column-major matrix
 typedef struct dd_Matrix {
-    int rows;
-    int cols;
+    long rows;
+    long cols;
     double *data;
 } dd_Matrix;
 
@@ -136,8 +137,9 @@ dd_status dd_doubles_to_fits(char *output_file, double **image, long *cols, long
     dd_check_cfitsio_status(status);
 
     int naxis = 2;
-    long image_dimensions[3];
+    long image_dimensions[3] = {0, 0, 0};
     long first_pixel_indices[3] = {1, 1, 1};
+    dd_debug("%i \n", *cols);
     image_dimensions[0] = *cols;
     image_dimensions[1] = *rows;
 
@@ -145,15 +147,18 @@ dd_status dd_doubles_to_fits(char *output_file, double **image, long *cols, long
         naxis = 3;
         image_dimensions[2] = *planes;
     }
-    int total_n_elements = (*cols) * (*rows);
+    long long total_n_elements = (*cols) * (*rows);
     if (planes != NULL) {
         total_n_elements *= (*planes);
     }
+    dd_debug("image_dimensions = %li x %li x %li\n", image_dimensions[0], image_dimensions[1], image_dimensions[2]);
+    dd_debug("total_n_elements = %li\n", total_n_elements);
     fits_create_img(outfptr, DOUBLE_IMG, naxis, image_dimensions, &status);
     dd_check_cfitsio_status(status);
-
+    dd_debug("after fits_create_img\n");
     fits_write_pix(outfptr, TDOUBLE, first_pixel_indices, total_n_elements, image, &status);
     dd_check_cfitsio_status(status);
+    dd_debug("after fits_write_pix\n");
 
     fits_close_file(outfptr, &status);
     dd_check_cfitsio_status(status);
@@ -348,17 +353,25 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
     // (Not used since all evecs should be != 0)
     MKL_INT _isuppz_unused[n];
     MKL_INT il = 1, iu;
-    if (eigenvectors->cols != eigenvalues->rows) {
-        dd_info(
-            "'eigenvectors' is %i x %i, 'eigenvalues' is %i x %i\n",
-            eigenvectors->cols,
-            eigenvectors->rows,
-            eigenvalues->rows,
-            eigenvalues->cols
-        );
+    dd_debug(
+        "'eigenvectors' is %i x %i, 'eigenvalues' is %i x %i\n",
+        eigenvectors->rows,
+        eigenvectors->cols,
+        eigenvalues->rows,
+        eigenvalues->cols
+    );
+    if (eigenvectors->cols != eigenvalues->cols) {
         return dd_error;
     }
     iu = eigenvectors->cols;
+    if (eigenvectors->data == NULL) {
+        dd_info("null pointer in eigenvectors struct\n");
+        exit(1);
+    }
+    if (eigenvalues->data == NULL) {
+        dd_info("null pointer in eigenvalues struct\n");
+        exit(1);
+    }
     MKL_INT m; // num eigenvectors found (filled by lapack)
     double abstol = -1; // use default tolerance
     double _vl_unused, _vu_unused; // "Not referenced if RANGE = 'A' or 'I'."
@@ -376,14 +389,15 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
                 matrix->cols,
                 matrix->data,
                 matrix->rows,
-                _vl_unused, _vu_unused,
+                _vl_unused,
+                _vu_unused,
                 il,
                 iu,
                 abstol,
                 &m,
                 eigenvalues->data,
                 eigenvectors->data,
-                eigenvectors->cols,
+                eigenvectors->rows,
                 _isuppz_unused,
                 &work_query,
                 lwork_query,
@@ -422,7 +436,7 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
         &m,
         eigenvalues->data,
         eigenvectors->data,
-        eigenvectors->cols,
+        eigenvectors->rows,
         _isuppz_unused,
         workspace.data,
         workspace.length,

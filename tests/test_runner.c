@@ -170,8 +170,8 @@ TEST get_eigenvectors_mkl_syevr(void) {
         .data = (double *)&eigenvectors
     };
     dd_Matrix my_eigenvalues = {
-        .rows = N,
-        .cols = 1,
+        .rows = 1,
+        .cols = N,
         .data = (double *)&eigenvalues
     };
     double duration;
