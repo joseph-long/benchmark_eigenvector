@@ -30,16 +30,14 @@ typedef struct dd_Matrix {
 
 void dd_print_matrix(dd_Matrix *matrix)
 {
-    printf("A is %i x %i\n", matrix->rows, matrix->cols);
-    // int m = matrix->rows;
-    // int n = matrix->cols;
+    dd_debug("A is %li x %li\n", matrix->rows, matrix->cols);
     int i, j;
     for (i = 0; i < matrix->rows; i++) {
         for (j = 0; j < matrix->cols; j++)
         {
-            printf("A[%i,%i] = %6.2f\t", i, j, matrix->data[j * matrix->cols + i]);
+            dd_debug("A[%li,%li] = %6.6e\t", i, j, matrix->data[j * matrix->rows + i]);
         }
-        printf("\n");
+        dd_debug("\n");
     }
 }
 
@@ -135,20 +133,20 @@ dd_status dd_doubles_to_fits(char *output_file, double **image, long *cols, long
     int status = 0;
     fits_create_diskfile(&outfptr, output_file, &status); // use _diskfile to avoid 'smart' filename parsing
     dd_check_cfitsio_status(status);
-
-    int naxis = 2;
+    int naxis = 1;
     long image_dimensions[3] = {0, 0, 0};
     long first_pixel_indices[3] = {1, 1, 1};
     dd_debug("%i \n", *cols);
     image_dimensions[0] = *cols;
-    image_dimensions[1] = *rows;
-
+    long long total_n_elements = (*cols);
+    if (rows != NULL) {
+        naxis = 2;
+        image_dimensions[1] = *rows;
+        total_n_elements *= (*rows);
+    }
     if (planes != NULL) {
         naxis = 3;
         image_dimensions[2] = *planes;
-    }
-    long long total_n_elements = (*cols) * (*rows);
-    if (planes != NULL) {
         total_n_elements *= (*planes);
     }
     dd_debug("image_dimensions = %li x %li x %li\n", image_dimensions[0], image_dimensions[1], image_dimensions[2]);
@@ -156,7 +154,7 @@ dd_status dd_doubles_to_fits(char *output_file, double **image, long *cols, long
     fits_create_img(outfptr, DOUBLE_IMG, naxis, image_dimensions, &status);
     dd_check_cfitsio_status(status);
     dd_debug("after fits_create_img\n");
-    fits_write_pix(outfptr, TDOUBLE, first_pixel_indices, total_n_elements, image, &status);
+    fits_write_pix(outfptr, TDOUBLE, first_pixel_indices, total_n_elements, *image, &status);
     dd_check_cfitsio_status(status);
     dd_debug("after fits_write_pix\n");
 
@@ -306,7 +304,7 @@ char DD_UPPER_TRIANGULAR = 'U';
 char DD_LOWER_TRIANGULAR = 'L';
 
 
-int _comparator_doubles(const void *lhs, const void *rhs, void *ctx) {
+int _comparator_doubles(const void *lhs, const void *rhs) {
     double left = *(const double *)lhs;
     double right = *(const double *)rhs;
     if (left < right) {
@@ -351,8 +349,8 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
     // The support of the eigenvectors in Z, i.e., the indices
     // indicating the nonzero elements in Z.
     // (Not used since all evecs should be != 0)
-    MKL_INT _isuppz_unused[n];
-    MKL_INT il = 1, iu;
+    MKL_INT _isuppz_unused[2 * n];
+    MKL_INT il = matrix->cols - eigenvectors->cols + 1, iu = matrix->cols;
     dd_debug(
         "'eigenvectors' is %i x %i, 'eigenvalues' is %i x %i\n",
         eigenvectors->rows,
@@ -360,10 +358,11 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
         eigenvalues->rows,
         eigenvalues->cols
     );
+    dd_debug("il = %li, iu = %li\n", il, iu);
     if (eigenvectors->cols != eigenvalues->cols) {
         return dd_error;
     }
-    iu = eigenvectors->cols;
+
     if (eigenvectors->data == NULL) {
         dd_info("null pointer in eigenvectors struct\n");
         exit(1);
@@ -374,27 +373,29 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
     }
     MKL_INT m; // num eigenvectors found (filled by lapack)
     double abstol = -1; // use default tolerance
-    double _vl_unused, _vu_unused; // "Not referenced if RANGE = 'A' or 'I'."
+    double _vl_unused = 0, _vu_unused = 0; // "Not referenced if RANGE = 'A' or 'I'."
     if (*workspace_ptrptr == NULL) {
         *workspace_ptrptr = (dd_DoubleWorkspace*)malloc(sizeof(dd_DoubleWorkspace));
         *intworkspace_ptrptr = (dd_IntWorkspace*)malloc(sizeof(dd_IntWorkspace));
         double work_query;
         MKL_INT iwork_query;
         MKL_INT lwork_query = -1, liwork_query = -1;
+        dd_debug("Workspace query iu = %li\n", iu);
         info = LAPACKE_dsyevr_work(
-                LAPACK_COL_MAJOR,
-                DD_COMPUTE_EVECS,
-                DD_EVALS_INDEX_RANGE,
-                DD_UPPER_TRIANGULAR,
-                matrix->cols,
-                matrix->data,
-                matrix->rows,
+                LAPACK_COL_MAJOR, // matrix_layout
+                DD_COMPUTE_EVECS, // jobz
+                // DD_EVALS_INDEX_RANGE, // range
+                DD_ALL_EVALS, // range
+                DD_UPPER_TRIANGULAR, // uplo
+                matrix->cols, // n
+                matrix->data, // a
+                matrix->rows, // lda
                 _vl_unused,
                 _vu_unused,
                 il,
                 iu,
                 abstol,
-                &m,
+                &m, //
                 eigenvalues->data,
                 eigenvectors->data,
                 eigenvectors->rows,
@@ -404,7 +405,7 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
                 &iwork_query,
                 liwork_query
         );
-        if( info > 0 ) {
+        if( info != 0 ) {
             dd_fatal("Workspace query failed\n");
         }
         (*workspace_ptrptr)->length = (MKL_INT)work_query;
@@ -424,7 +425,7 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
     info = LAPACKE_dsyevr_work(
         LAPACK_COL_MAJOR,
         DD_COMPUTE_EVECS,
-        DD_EVALS_INDEX_RANGE,
+        DD_ALL_EVALS, // range
         DD_UPPER_TRIANGULAR,
         matrix->cols,
         matrix->data,
@@ -443,6 +444,9 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
         intworkspace.data,
         intworkspace.length
     );
+    if( info != 0 ) {
+        dd_fatal("MKL dsyevr failed\n");
+    }
     *time_elapsed = -(*time_elapsed - dd_timestamp());
     // dd_info("Took %f for mkl_syevr\n", *time_elapsed);
     return dd_success;

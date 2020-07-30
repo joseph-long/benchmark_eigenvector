@@ -27,3 +27,6 @@ lapacke_dsyevr_row_ex = np.asarray([
 ])
 
 write_data('lapacke_dsyevr_row_ex', lapacke_dsyevr_row_ex)
+
+np.random.seed(1)
+write_data('noise_20_30', np.random.randn(20, 30))

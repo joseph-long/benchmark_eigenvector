@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <getopt.h>
 #include <strings.h>
+#include <errno.h>
 #include "fitsio.h"
 #define DD_DEBUG
 #include "doodads.h"
@@ -23,7 +24,7 @@ static struct option long_options[] = {
     {"method", required_argument, NULL, 'm'},
     {"warmups", required_argument, NULL, 'w'},
     {"iterations", required_argument, NULL, 'i'},
-    {"outfile", required_argument, NULL, 'o'},
+    {"outprefix", required_argument, NULL, 'o'},
 };
 
 enum method_choices
@@ -40,12 +41,28 @@ static inline const char *string_from_method(enum method_choices val)
 
 static enum method_choices method = mkl_syevr;
 
-// Method functions
+char *construct_filename(char *dest, char *prefix, char *suffix) {
+    printf("%x %x %x\n", dest, prefix, suffix);
+    strcpy(dest, "");
+    strcat(dest, prefix);
+    strcat(dest, suffix);
+    return dest;
+}
+
+void remove_if_exists(char *filepath) {
+    if (remove(filepath) != 0) {
+        if (errno != ENOENT) {
+            dd_debug("Error: %s", strerror(errno));
+            exit(1);
+        }
+    }
+}
 
 int main(int argc, char *argv[])
 {
     char option_code;
-    char *outfile = NULL;
+    char outprefix[500] = "";
+    printf("outprefix %x", outprefix);
     while ((option_code = getopt_long(argc, argv, ":cn:e:m:w:i:o:", long_options, NULL)) != -1)
     {
         switch (option_code)
@@ -77,7 +94,7 @@ int main(int argc, char *argv[])
             iterations = strtol(optarg, NULL, 10);
             break;
         case 'o':
-            outfile = optarg;
+            strcat(outprefix, optarg);
             break;
         case ':':
             /* missing option argument */
@@ -100,7 +117,7 @@ int main(int argc, char *argv[])
     dd_debug("Method (-m METHOD): %s\n", string_from_method(method));
     dd_debug("Warmups (-w NUM): %i\n", warmups);
     dd_debug("Iterations (-i NUM): %i\n", iterations);
-    dd_debug("Output file path (-o OUTFILE): %s\n", outfile);
+    dd_debug("Output file prefix (-o OUTPREFIX): %s\n", outprefix);
     for (int i = optind; i < argc; i++)
     {
         dd_debug("%i %s\n", i, argv[i]);
@@ -111,11 +128,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
     char *input_file = argv[optind];
-    char *output_file;
-    if (optind + 1 < argc)
-    {
-        output_file = argv[optind + 1];
-    }
+    char output_file[512]; // dest buffer for construcitng cov, evec, eval output names
     // load fits cube
     double *image;
     long cols, rows, planes;
@@ -164,7 +177,6 @@ int main(int argc, char *argv[])
     // Transpose to column-major for LAPACK reasons
     double *transposed_image;
     dd_make_transpose(image, &transposed_image, mtx_cols, mtx_rows);
-    size_t data_size = mtx_cols * mtx_rows * sizeof(double);
     // wrap transposed in dd_Matrix struct
     dd_Matrix input_matrix = {
         .cols = mtx_cols,
@@ -180,9 +192,22 @@ int main(int argc, char *argv[])
         data_matrix.data = (double *)malloc(data_matrix.rows * data_matrix.cols * sizeof(double));
         dd_sample_covariance(&input_matrix, &data_matrix);
         dd_debug("cov mtx %i x %i\n", data_matrix.rows, data_matrix.cols);
+        double *covdata = data_matrix.data;
+        long rows, cols;
+        rows = data_matrix.rows;
+        cols = data_matrix.cols;
+        construct_filename(output_file, outprefix, "_cov.fits");
+        remove_if_exists(output_file);
+        dd_doubles_to_fits(output_file, &covdata, &cols, &rows, NULL);
+        dd_debug("Saving covariance to %s\n", output_file);
     } else {
         data_matrix = input_matrix;
     }
+
+    // make space for a copy for the solver to chew up
+    size_t data_size = data_matrix.cols * data_matrix.rows * sizeof(double);
+    double *pristine_data = (double *)malloc(data_size);
+    memcpy(pristine_data, data_matrix.data, data_size);
 
     // Handle default number of evecs
     if (number_of_eigenvectors == 0) {
@@ -191,52 +216,64 @@ int main(int argc, char *argv[])
 
     // make space for evecs output
     // double *output = (double *)malloc(num_evecs * rows * sizeof(double));
-    // make space for a copy for the solver to chew up
-    // double *matrix_to_process = (double *)malloc(data_size);
     dd_Matrix out_eigenvectors = {
         .cols = number_of_eigenvectors,
         .rows = data_matrix.rows,
-        .data = (double *)malloc(number_of_eigenvectors * data_matrix.rows * sizeof(double))
+        .data = (double *)calloc(number_of_eigenvectors * data_matrix.rows, sizeof(double))
     };
     dd_Matrix out_eigenvalues = {
         .cols = number_of_eigenvectors,
         .rows = 1,
-        .data = (double *)malloc(number_of_eigenvectors * sizeof(double))
+        .data = (double *)calloc(number_of_eigenvectors, sizeof(double))
     };
     double out_time_elapsed;
-    dd_DoubleWorkspace inout_workspace = {
-      .length = 0,
-      .data = NULL
-    };
-    dd_IntWorkspace inout_intworkspace = {
-      .length = 0,
-      .data = NULL
-    };
+    dd_DoubleWorkspace *inout_workspace = NULL;
+    dd_IntWorkspace *inout_intworkspace = NULL;
+    if (strlen(outprefix) != 0 && warmups == 0) {
+        // force one warm-up to have data to write
+        warmups = 1;
+    }
     // warmup iterations
     for (int i = 0; i < warmups; i++) {
+        memcpy(data_matrix.data, pristine_data, data_size);
         dd_mkl_syevr(&data_matrix, &out_eigenvectors, &out_eigenvalues, &out_time_elapsed, &inout_workspace, &inout_intworkspace);
     }
-    // timer iterations
-    double start, end, total_time; // timestamp values
-    for (int i = 0; i < iterations; i++) {
-        start = dd_timestamp();
-        dd_mkl_syevr(&data_matrix, &out_eigenvectors, &out_eigenvalues, &out_time_elapsed, &inout_workspace, &inout_intworkspace);
-        end = dd_timestamp();
-        total_time += end - start;
-        dd_debug("%f sec\n", end - start, end, start);
-    }
-    dd_print_matrix(&out_eigenvectors);
     // optionally write evecs to fits
-    if (outfile != NULL) {
-        double *transposed_image;
-        dd_make_transpose(out_eigenvectors.data, &transposed_image, out_eigenvectors.cols, out_eigenvectors.rows);
-        dd_debug("Made transpose %x\n", transposed_image);
+    if (strlen(outprefix) != 0) {
+        // Save eigenvectors
+        double *transposed_evecs;
+        dd_make_transpose(out_eigenvectors.data, &transposed_evecs, out_eigenvectors.cols, out_eigenvectors.rows);
+        dd_debug("Made transpose %x\n", transposed_evecs);
         long cols, rows;
         cols = out_eigenvectors.cols;
         rows = out_eigenvectors.rows;
-        dd_doubles_to_fits(outfile, transposed_image, &cols, &rows, NULL);
+        construct_filename(output_file, outprefix, "_evecs.fits");
+        remove_if_exists(output_file);
+        dd_debug("Saving eigenvectors to %s\n", output_file);
+        dd_doubles_to_fits(output_file, &transposed_evecs, &cols, &rows, NULL);
+
+        // Save eigenvalues
+        construct_filename(output_file, outprefix, "_evals.fits");
+        remove_if_exists(output_file);
+        dd_debug("Saving eigenvalues to %s\n", output_file);
+        rows = 1;
+        dd_doubles_to_fits(output_file, &out_eigenvalues.data, &cols, NULL, NULL);
     }
-    // write timing info to stdout
-    dd_debug("%i iterations, avg %f sec each\n", iterations, total_time / iterations);
+    // timer iterations
+    if (iterations > 0) {
+        double start, end, total_time = 0; // timestamp values
+        for (int i = 0; i < iterations; i++) {
+            memcpy(data_matrix.data, pristine_data, data_size);
+            start = dd_timestamp();
+            dd_mkl_syevr(&data_matrix, &out_eigenvectors, &out_eigenvalues, &out_time_elapsed, &inout_workspace, &inout_intworkspace);
+            end = dd_timestamp();
+            total_time += end - start;
+            dd_debug("%f sec\n", end - start, end, start);
+        }
+        dd_print_matrix(&out_eigenvalues);
+
+        // write timing info to stdout
+        dd_debug("%i iterations, avg %f sec each\n", iterations, total_time / iterations);
+    }
     return 0;
 }
