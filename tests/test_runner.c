@@ -247,7 +247,7 @@ TEST matrix_product(void) {
     PASS();
 }
 
-TEST column_mean(void) {
+TEST row_mean(void) {
     int rows = 4;
     int cols = 3;
     double a[3 * 4] = {
@@ -277,14 +277,14 @@ TEST column_mean(void) {
         0.1, -0.1, 0, 0,
         0.1, -0.1, 0, 0,
     };
-    dd_subtract_mean_column(&my_matrix, &mean_sub_matrix, &column_means);
+    dd_subtract_mean_row(&my_matrix, &mean_sub_matrix, &column_means);
     ASSERTm("Column mean values incorrect", dd_doubles_all_close(&column_means, &right_means, 3, 1e-8));
     ASSERTm("Mean subtracted matrix incorrect", dd_doubles_all_close(mean_sub_matrix.data, &right_mean_sub, 3 * 4, 1e-8));
     PASS();
 }
 
 
-TEST row_mean(void) {
+TEST column_mean(void) {
     int rows = 4;
     int cols = 3;
     double a[3 * 4] = {
@@ -314,7 +314,7 @@ TEST row_mean(void) {
         -0.1, -0.1, -0.1, -0.1,
         0.0, 0.0, 0.0, 0.0,
     };
-    dd_subtract_mean_row(&my_matrix, &mean_sub_matrix, &row_means);
+    dd_subtract_mean_column(&my_matrix, &mean_sub_matrix, &row_means);
     ASSERTm("Row mean values incorrect", dd_doubles_all_close(&row_means, &right_means, 3, 1e-8));
     ASSERTm("Mean subtracted matrix incorrect", dd_doubles_all_close(mean_sub_matrix.data, &right_mean_sub, 3 * 4, 1e-8));
     PASS();

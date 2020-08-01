@@ -211,7 +211,7 @@ dd_status dd_matrix_product(/* in */ double alpha,
     return dd_success;
 }
 
-dd_status dd_subtract_mean_column(/* in */ dd_Matrix *matrix,
+dd_status dd_subtract_mean_row(/* in */ dd_Matrix *matrix,
                                   /* out */ dd_Matrix *mean_sub_matrix,
                                   /* out */ double *column_means) {
     int cols = matrix->cols;
@@ -232,7 +232,7 @@ dd_status dd_subtract_mean_column(/* in */ dd_Matrix *matrix,
     return dd_success;
 }
 
-dd_status dd_subtract_mean_row(/* in */ dd_Matrix *matrix,
+dd_status dd_subtract_mean_column(/* in */ dd_Matrix *matrix,
                                /* out */ dd_Matrix *mean_sub_matrix,
                                /* out */ double *row_means) {
     int cols = matrix->cols;
@@ -255,19 +255,19 @@ dd_status dd_subtract_mean_row(/* in */ dd_Matrix *matrix,
 
 dd_status dd_sample_covariance(/* in */ dd_Matrix *matrix,
                                /* out */ dd_Matrix *cov_matrix) {
-    double *column_means = (double *)malloc(matrix->cols * sizeof(double));
+    double *row_means = (double *)malloc(matrix->rows * sizeof(double));
     double *mean_sub_data = (double *)malloc(matrix->rows * matrix->cols * sizeof(double));
     dd_Matrix mean_sub_matrix = {
         .rows = matrix->rows,
         .cols = matrix->cols,
         .data = mean_sub_data
     };
-    dd_subtract_mean_row(matrix, &mean_sub_matrix, column_means);
+    dd_subtract_mean_column(matrix, &mean_sub_matrix, row_means);
 
     float prefactor = 1.0 / (float)(matrix->cols - 1);
 
     dd_matrix_product(prefactor, &mean_sub_matrix, false, &mean_sub_matrix, true, 0.0, cov_matrix);
-    free((void *)mean_sub_data);
+    free(mean_sub_data);
     return dd_success;
 }
 

@@ -1,5 +1,5 @@
-CC ?= clang
-CFLAGS ?= -fsanitize=undefined -g -Wall
+CC = gcc
+CFLAGS ?= -g3 -Wall -I$(HOME)/.local/include -L$(HOME)/.local/lib
 MKLROOT ?= /opt/intel/mkl
 TEMPDIR := $(shell mktemp -d)
 
@@ -37,4 +37,8 @@ test: test_runner python_cross_check
 	cd ./tests && \
 	./test_runner
 
-.PHONY: all test python_cross_check
+clean:
+	rm -f fits_to_evecs
+	rm -f tests/test_runner
+
+.PHONY: all test python_cross_check clean
