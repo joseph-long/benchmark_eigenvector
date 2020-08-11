@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS ?= -g3 -Wall -I$(HOME)/.local/include -L$(HOME)/.local/lib
+CFLAGS ?= -g3 -fsanitize=undefined -Wall -I$(HOME)/.local/include -L$(HOME)/.local/lib
 MKLROOT ?= /opt/intel/mkl
 TEMPDIR := $(shell mktemp -d)
 
@@ -22,8 +22,9 @@ test_runner: doodads.h tests/test_runner.c
 python_cross_check: fits_to_evecs
 	./fits_to_evecs \
 		--method mkl_syevr \
-		--warmups 1 \
-		--iterations 0 \
+		--warmups 2 \
+		--iterations 1 \
+		--ramp 1 \
 		--outprefix $(TEMPDIR)/test \
 		tests/data/noise_20_30.fits
 	python \

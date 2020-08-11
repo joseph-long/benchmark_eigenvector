@@ -1,29 +1,36 @@
 #include <stdio.h>
+#include <string.h>
 #include <getopt.h>
 #include <strings.h>
 #include <errno.h>
 #include "fitsio.h"
-#define DD_DEBUG
+// #define DD_DEBUG
 #include "doodads.h"
 #include "mkl.h"
 
 // don't want to time covariance calc, use a global
 // to persist it outside work func
-static double *precalculated_cov;
-static double *image;
+// static double *precalculated_cov;
+// static double *image;
 static long cols, rows, planes;
 static int cube_flag = 0;
+static int ramp_increment = -1;
 static long number_of_images = 0;
 static long number_of_eigenvectors = 0;
 static int warmups = 1;
 static int iterations = 1;
 
+static char HEADER[] = "rows\tcols\tmethod\tn_evecs\ttime_spent\n";
+static char FORMAT[] = "%li\t%li\t%s\t%li\t%e\n";
+
 static struct option long_options[] = {
     {"cube", no_argument, NULL, 'c'},
     {"number_of_images", required_argument, NULL, 'n'},
+    {"number_of_eigenvectors", required_argument, NULL, 'n'},
     {"method", required_argument, NULL, 'm'},
     {"warmups", required_argument, NULL, 'w'},
     {"iterations", required_argument, NULL, 'i'},
+    {"ramp", required_argument, NULL, 'r'},
     {"outprefix", required_argument, NULL, 'o'},
 };
 
@@ -42,7 +49,7 @@ static inline const char *string_from_method(enum method_choices val)
 static enum method_choices method = mkl_syevr;
 
 char *construct_filename(char *dest, char *prefix, char *suffix) {
-    printf("%x %x %x\n", dest, prefix, suffix);
+    // printf("%x %x %x\n", dest, prefix, suffix);
     strcpy(dest, "");
     strcat(dest, prefix);
     strcat(dest, suffix);
@@ -62,8 +69,7 @@ int main(int argc, char *argv[])
 {
     char option_code;
     char outprefix[500] = "";
-    printf("outprefix %x", outprefix);
-    while ((option_code = getopt_long(argc, argv, ":cn:e:m:w:i:o:", long_options, NULL)) != -1)
+    while ((option_code = getopt_long(argc, argv, ":cn:e:m:w:i:r:o:", long_options, NULL)) != -1)
     {
         switch (option_code)
         {
@@ -95,6 +101,9 @@ int main(int argc, char *argv[])
             break;
         case 'o':
             strcat(outprefix, optarg);
+            break;
+        case 'r':
+            ramp_increment = strtol(optarg, NULL, 10);
             break;
         case ':':
             /* missing option argument */
@@ -196,10 +205,12 @@ int main(int argc, char *argv[])
         long rows, cols;
         rows = data_matrix.rows;
         cols = data_matrix.cols;
-        construct_filename(output_file, outprefix, "_cov.fits");
-        remove_if_exists(output_file);
-        dd_doubles_to_fits(output_file, &covdata, &cols, &rows, NULL);
-        dd_debug("Saving covariance to %s\n", output_file);
+        if (strlen(outprefix) != 0) {
+            construct_filename(output_file, outprefix, "_cov.fits");
+            remove_if_exists(output_file);
+            dd_doubles_to_fits(output_file, &covdata, &cols, &rows, NULL);
+            dd_debug("Saving covariance to %s\n", output_file);
+        }
     } else {
         data_matrix = input_matrix;
     }
@@ -235,8 +246,84 @@ int main(int argc, char *argv[])
     }
     // warmup iterations
     for (int i = 0; i < warmups; i++) {
+        // restore pristine data (yes this appears to be needed)
         memcpy(data_matrix.data, pristine_data, data_size);
         dd_mkl_syevr(&data_matrix, &out_eigenvectors, &out_eigenvalues, &out_time_elapsed, &inout_workspace, &inout_intworkspace);
+    }
+    // timer iterations
+    if (iterations > 0) {
+        printf(HEADER);
+        double start, end, total_time = 0; // timestamp values
+        for (int i = 0; i < iterations; i++) {
+            
+            if (ramp_increment > 0) {
+                int current_n_evecs = 1;
+                while (1) {
+                    dd_debug("ramp %i / %i\n", current_n_evecs, number_of_eigenvectors);
+                    out_eigenvectors.cols = current_n_evecs;
+                    out_eigenvalues.cols = current_n_evecs;
+                    // restore pristine data (yes this appears to be needed)
+                    memcpy(data_matrix.data, pristine_data, data_size);
+                    start = dd_timestamp();
+                    dd_mkl_syevr(
+                        &data_matrix,
+                        &out_eigenvectors,
+                        &out_eigenvalues,
+                        &out_time_elapsed,
+                        &inout_workspace,
+                        &inout_intworkspace
+                    );
+                    end = dd_timestamp();
+                    total_time += end - start;
+                    double time_spent = end - start;
+                    // rows cols method n_evecs time_spent
+                    printf(FORMAT,
+                        data_matrix.rows,
+                        data_matrix.cols,
+                        string_from_method(method),
+                        out_eigenvectors.cols,
+                        time_spent
+                    );
+                    if (current_n_evecs == number_of_eigenvectors) {
+                        break;
+                    }
+                    current_n_evecs += ramp_increment;
+                    if (current_n_evecs > number_of_eigenvectors) {
+                        // overshot the upper bound
+                        current_n_evecs = number_of_eigenvectors;
+                    }
+                }
+            } else {
+                // restore pristine data (yes this appears to be needed)
+                memcpy(data_matrix.data, pristine_data, data_size);
+                start = dd_timestamp();
+                dd_mkl_syevr(
+                    &data_matrix,
+                    &out_eigenvectors,
+                    &out_eigenvalues,
+                    &out_time_elapsed,
+                    &inout_workspace,
+                    &inout_intworkspace
+                );
+                end = dd_timestamp();
+                total_time += end - start;
+                double time_spent = end - start;
+                // rows cols method n_evecs time_spent
+                printf(FORMAT,
+                    data_matrix.rows,
+                    data_matrix.cols,
+                    string_from_method(method),
+                    out_eigenvectors.cols,
+                    time_spent
+                );
+            }
+            
+            dd_debug("%f sec\n", end - start, end, start);
+        }
+        // dd_print_matrix(&out_eigenvalues);
+
+        // write timing info to stdout
+        // dd_debug("%i iterations, avg %f sec each\n", iterations, total_time / iterations);
     }
     // optionally write evecs to fits
     if (strlen(outprefix) != 0) {
@@ -258,22 +345,6 @@ int main(int argc, char *argv[])
         dd_debug("Saving eigenvalues to %s\n", output_file);
         rows = 1;
         dd_doubles_to_fits(output_file, &out_eigenvalues.data, &cols, NULL, NULL);
-    }
-    // timer iterations
-    if (iterations > 0) {
-        double start, end, total_time = 0; // timestamp values
-        for (int i = 0; i < iterations; i++) {
-            memcpy(data_matrix.data, pristine_data, data_size);
-            start = dd_timestamp();
-            dd_mkl_syevr(&data_matrix, &out_eigenvectors, &out_eigenvalues, &out_time_elapsed, &inout_workspace, &inout_intworkspace);
-            end = dd_timestamp();
-            total_time += end - start;
-            dd_debug("%f sec\n", end - start, end, start);
-        }
-        dd_print_matrix(&out_eigenvalues);
-
-        // write timing info to stdout
-        dd_debug("%i iterations, avg %f sec each\n", iterations, total_time / iterations);
     }
     return 0;
 }
