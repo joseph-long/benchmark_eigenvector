@@ -4,7 +4,7 @@
 #include <strings.h>
 #include <errno.h>
 #include "fitsio.h"
-// #define DD_DEBUG
+#define DD_DEBUG
 #include "doodads.h"
 #include "mkl.h"
 
@@ -25,8 +25,8 @@ static char FORMAT[] = "%li\t%li\t%s\t%li\t%e\n";
 
 static struct option long_options[] = {
     {"cube", no_argument, NULL, 'c'},
-    {"number_of_images", required_argument, NULL, 'i'},
-    {"number_of_eigenvectors", required_argument, NULL, 'n'},
+    {"number_of_images", required_argument, NULL, 'n'},
+    {"number_of_eigenvectors", required_argument, NULL, 'e'},
     {"method", required_argument, NULL, 'm'},
     {"warmups", required_argument, NULL, 'w'},
     {"iterations", required_argument, NULL, 'i'},
@@ -77,6 +77,7 @@ int main(int argc, char *argv[])
             cube_flag = 1;
             break;
         case 'n':
+            dd_fatal('--number_of_images not implemented\n');
             number_of_images = strtol(optarg, NULL, 10);
             break;
         case 'e':
@@ -159,6 +160,7 @@ int main(int argc, char *argv[])
     }
     dd_debug("\t%li rows\n", rows);
     dd_debug("\t%li columns\n", cols);
+
     // Handle default number of images
     if (number_of_images == 0) {
         dd_debug("Using all images: ");
@@ -181,8 +183,6 @@ int main(int argc, char *argv[])
         mtx_cols = cols;
         mtx_rows = rows;
     }
-    // TODO this as an arg
-    // int num_evecs = 3;
     // Transpose to column-major for LAPACK reasons
     double *transposed_image;
     dd_make_transpose(image, &transposed_image, mtx_cols, mtx_rows);
