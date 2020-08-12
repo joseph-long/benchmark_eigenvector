@@ -25,7 +25,7 @@ static char FORMAT[] = "%li\t%li\t%s\t%li\t%e\n";
 
 static struct option long_options[] = {
     {"cube", no_argument, NULL, 'c'},
-    {"number_of_images", required_argument, NULL, 'n'},
+    {"number_of_images", required_argument, NULL, 'i'},
     {"number_of_eigenvectors", required_argument, NULL, 'n'},
     {"method", required_argument, NULL, 'm'},
     {"warmups", required_argument, NULL, 'w'},
