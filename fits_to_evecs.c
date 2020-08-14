@@ -5,6 +5,7 @@
 #include <errno.h>
 #include "fitsio.h"
 #define DD_DEBUG
+// #define DOUBLE_CHECK_WORKSPACE
 #include "doodads.h"
 #include "mkl.h"
 
