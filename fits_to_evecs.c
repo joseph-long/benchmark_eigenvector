@@ -15,7 +15,6 @@
 // static double *image;
 static long cols, rows, planes;
 static int cube_flag = 0;
-static int ramp_increment = -1;
 static long number_of_images = 0;
 static long number_of_eigenvectors = 0;
 static int warmups = 1;
@@ -31,7 +30,6 @@ static struct option long_options[] = {
     {"method", required_argument, NULL, 'm'},
     {"warmups", required_argument, NULL, 'w'},
     {"iterations", required_argument, NULL, 'i'},
-    {"ramp", required_argument, NULL, 'r'},
     {"outprefix", required_argument, NULL, 'o'},
 };
 
@@ -70,7 +68,7 @@ int main(int argc, char *argv[])
 {
     char option_code;
     char outprefix[500] = "";
-    while ((option_code = getopt_long(argc, argv, ":cn:e:m:w:i:r:o:", long_options, NULL)) != -1)
+    while ((option_code = getopt_long(argc, argv, ":cn:e:m:w:i:o:", long_options, NULL)) != -1)
     {
         switch (option_code)
         {
@@ -103,9 +101,6 @@ int main(int argc, char *argv[])
             break;
         case 'o':
             strcat(outprefix, optarg);
-            break;
-        case 'r':
-            ramp_increment = strtol(optarg, NULL, 10);
             break;
         case ':':
             /* missing option argument */
@@ -186,7 +181,7 @@ int main(int argc, char *argv[])
     }
     // Transpose to column-major for LAPACK reasons
     double *transposed_image;
-    dd_make_transpose(image, &transposed_image, mtx_cols, mtx_rows);
+    dd_convert_to_colmajor(image, &transposed_image, mtx_cols, mtx_rows);
     // wrap transposed in dd_Matrix struct
     dd_Matrix input_matrix = {
         .cols = mtx_cols,
@@ -200,6 +195,7 @@ int main(int argc, char *argv[])
         data_matrix.rows = mtx_rows;
         data_matrix.cols = mtx_rows;
         data_matrix.data = (double *)malloc(data_matrix.rows * data_matrix.cols * sizeof(double));
+        dd_debug("making cov mtx\n");
         dd_sample_covariance(&input_matrix, &data_matrix);
         dd_debug("cov mtx %i x %i\n", data_matrix.rows, data_matrix.cols);
         double *covdata = data_matrix.data;
@@ -256,69 +252,28 @@ int main(int argc, char *argv[])
         printf(HEADER);
         double start, end, total_time = 0; // timestamp values
         for (int i = 0; i < iterations; i++) {
-            
-            if (ramp_increment > 0) {
-                int current_n_evecs = 1;
-                while (1) {
-                    dd_debug("ramp %i / %i\n", current_n_evecs, number_of_eigenvectors);
-                    out_eigenvectors.cols = current_n_evecs;
-                    out_eigenvalues.cols = current_n_evecs;
-                    // restore pristine data (yes this appears to be needed)
-                    memcpy(data_matrix.data, pristine_data, data_size);
-                    start = dd_timestamp();
-                    dd_mkl_syevr(
-                        &data_matrix,
-                        &out_eigenvectors,
-                        &out_eigenvalues,
-                        &out_time_elapsed,
-                        &inout_workspace,
-                        &inout_intworkspace
-                    );
-                    end = dd_timestamp();
-                    total_time += end - start;
-                    double time_spent = end - start;
-                    // rows cols method n_evecs time_spent
-                    printf(FORMAT,
-                        data_matrix.rows,
-                        data_matrix.cols,
-                        string_from_method(method),
-                        out_eigenvectors.cols,
-                        time_spent
-                    );
-                    if (current_n_evecs == number_of_eigenvectors) {
-                        break;
-                    }
-                    current_n_evecs += ramp_increment;
-                    if (current_n_evecs > number_of_eigenvectors) {
-                        // overshot the upper bound
-                        current_n_evecs = number_of_eigenvectors;
-                    }
-                }
-            } else {
-                // restore pristine data (yes this appears to be needed)
-                memcpy(data_matrix.data, pristine_data, data_size);
-                start = dd_timestamp();
-                dd_mkl_syevr(
-                    &data_matrix,
-                    &out_eigenvectors,
-                    &out_eigenvalues,
-                    &out_time_elapsed,
-                    &inout_workspace,
-                    &inout_intworkspace
-                );
-                end = dd_timestamp();
-                total_time += end - start;
-                double time_spent = end - start;
-                // rows cols method n_evecs time_spent
-                printf(FORMAT,
-                    data_matrix.rows,
-                    data_matrix.cols,
-                    string_from_method(method),
-                    out_eigenvectors.cols,
-                    time_spent
-                );
-            }
-            
+            // restore pristine data (yes this appears to be needed)
+            memcpy(data_matrix.data, pristine_data, data_size);
+            start = dd_timestamp();
+            dd_mkl_syevr(
+                &data_matrix,
+                &out_eigenvectors,
+                &out_eigenvalues,
+                &out_time_elapsed,
+                &inout_workspace,
+                &inout_intworkspace
+            );
+            end = dd_timestamp();
+            total_time += end - start;
+            double time_spent = end - start;
+            // rows cols method n_evecs time_spent
+            printf(FORMAT,
+                data_matrix.rows,
+                data_matrix.cols,
+                string_from_method(method),
+                out_eigenvectors.cols,
+                time_spent
+            );
             dd_debug("%f sec\n", end - start, end, start);
         }
         // dd_print_matrix(&out_eigenvalues);
@@ -329,8 +284,16 @@ int main(int argc, char *argv[])
     // optionally write evecs to fits
     if (strlen(outprefix) != 0) {
         // Save eigenvectors
+        // dd_print_matrix(&out_eigenvectors);
         double *transposed_evecs;
-        dd_make_transpose(out_eigenvectors.data, &transposed_evecs, out_eigenvectors.cols, out_eigenvectors.rows);
+        dd_convert_to_rowmajor(out_eigenvectors.data, &transposed_evecs, out_eigenvectors.cols, out_eigenvectors.rows);
+        // for (int i = 0; i < out_eigenvectors.cols * out_eigenvectors.rows; i++) {
+        //     if(i % out_eigenvectors.cols == 0) {
+        //         printf("\n");
+        //     }
+        //     printf("A[%i] = %e\t", i, transposed_evecs[i]);
+        // }
+        // printf("\n");
         dd_debug("Made transpose %x\n", transposed_evecs);
         long cols, rows;
         cols = out_eigenvectors.cols;

@@ -271,7 +271,7 @@ dd_status dd_sample_covariance(/* in */ dd_Matrix *matrix,
     return dd_success;
 }
 
-dd_status dd_make_transpose(double *input_matrix, double **output_matrix, long cols, long rows) {
+dd_status dd_convert_to_colmajor(double *input_matrix, double **output_matrix, long cols, long rows) {
     long total_n_elements = rows * cols;
     *output_matrix = (double *)malloc(total_n_elements * sizeof(double));
     if (*output_matrix == NULL) {
@@ -280,6 +280,19 @@ dd_status dd_make_transpose(double *input_matrix, double **output_matrix, long c
     for (int c = 0; c < cols; c++) {
         for (int r = 0; r < rows; r++) {
             (*output_matrix)[c * rows + r] = input_matrix[r * cols + c];
+        }
+    }
+    return dd_success;
+}
+dd_status dd_convert_to_rowmajor(double *input_matrix, double **output_matrix, long cols, long rows) {
+    long total_n_elements = rows * cols;
+    *output_matrix = (double *)malloc(total_n_elements * sizeof(double));
+    if (*output_matrix == NULL) {
+        exit(1);
+    }
+    for (int c = 0; c < cols; c++) {
+        for (int r = 0; r < rows; r++) {
+            (*output_matrix)[r * cols + c] = input_matrix[c * rows + r];
         }
     }
     return dd_success;
@@ -321,6 +334,13 @@ bool dd_doubles_all_close(double *a, double *b, long length, double tol) {
         if (fabs(a[i] - b[i]) > tol) {
             return false;
         }
+    }
+    return true;
+}
+
+bool dd_doubles_close(double a, double b, double tol) {
+    if (fabs(a - b) > tol) {
+        return false;
     }
     return true;
 }
@@ -372,7 +392,9 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
         exit(1);
     }
     MKL_INT m; // num eigenvectors found (filled by lapack)
-    double abstol = -1; // use default tolerance
+    double abstol = LAPACKE_dlamch('S'); // match mxlib
+    dd_debug("Abstol %e\n", abstol);
+
     double _vl_unused = 0, _vu_unused = 0; // "Not referenced if RANGE = 'A' or 'I'."
     if (*workspace_ptrptr == NULL) {
         *workspace_ptrptr = (dd_DoubleWorkspace*)malloc(sizeof(dd_DoubleWorkspace));
@@ -384,102 +406,30 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
         dd_debug("Workspace query iu = %li\n", iu);
         info = LAPACKE_dsyevr_work(
                 LAPACK_COL_MAJOR, // matrix_layout
-                DD_COMPUTE_EVECS, // jobz
-                // DD_EVALS_INDEX_RANGE, // range
-                DD_ALL_EVALS, // range
-                DD_UPPER_TRIANGULAR, // uplo
+                DD_COMPUTE_EVECS, // jobz - just eigenvalues, or eigenvalues and eigenvectors?
+                DD_ALL_EVALS, // range - set to ALL just for the work query (upper bound)
+                DD_UPPER_TRIANGULAR, // uplo - upper or lower triangular (doesn't matter here)
                 matrix->cols, // n
                 matrix->data, // a
                 matrix->rows, // lda
-                _vl_unused,
-                _vu_unused,
-                il,
-                iu,
-                abstol,
-                &m, //
-                eigenvalues->data,
-                eigenvectors->data,
-                eigenvectors->rows,
-                _isuppz_unused,
-                &work_query,
-                lwork_query,
-                &iwork_query,
-                liwork_query
+                _vl_unused, // vl - lowest value of eigenvalue to find
+                _vu_unused, // vu - highest value of eigenvalue to find
+                il, // il - lowest index of eigenvalue to find
+                iu, // iu - highest index of eigenvalue to find
+                abstol,  // abstol - converged eigenvalues lie in interval ABSTOL + EPS *   max( |a|,|b| ) 
+                &m, // m - number of eigenvalues found
+                eigenvalues->data, // w - eigenvalues (ascending)
+                eigenvectors->data, // z - eigenvectors array
+                eigenvectors->rows, // ldz - leading dimension of z
+                _isuppz_unused, // isuppz - support of eigenvectors (used when il = 1 and iu = matrix->cols, must be present)
+                &work_query, // work - workspace array (here length 1, will contain workspace size to allocate)
+                lwork_query, // lwork - length of workspace (here -1 for query)
+                &iwork_query, // iwork - integer workspace array (here length 1, will contain workspace size to allocate)
+                liwork_query // liwork - length of integer workspace (here -1 for query)
         );
         if( info != 0 ) {
             dd_fatal("Workspace query failed\n");
         }
-#ifdef DOUBLE_CHECK_WORKSPACE
-        //  Allocate minimum allowed sizes for workspace
-        MKL_INT sizeWork = 26*n;
-        double * work_dblchk = (double *) malloc (sizeWork*sizeof(double));
-
-        MKL_INT sizeIWork = 10*n;
-        MKL_INT * iwork_dblchk = (MKL_INT *) malloc (sizeIWork*sizeof(MKL_INT));
-        dd_debug("Double checking workspace for all evals\n");
-        // check size for ALL_EVALS
-        info = LAPACKE_dsyevr_work(
-                LAPACK_COL_MAJOR, // matrix_layout
-                DD_COMPUTE_EVECS, // jobz
-                DD_ALL_EVALS, // range
-                DD_UPPER_TRIANGULAR, // uplo
-                matrix->cols, // n
-                matrix->data, // a
-                matrix->rows, // lda
-                _vl_unused,
-                _vu_unused,
-                il,
-                iu,
-                abstol,
-                &m,
-                eigenvalues->data,
-                eigenvectors->data,
-                eigenvectors->rows,
-                _isuppz_unused,
-                work_dblchk,
-                lwork_query,
-                iwork_dblchk,
-                liwork_query
-        );
-        if (work_dblchk[0] != work_query) {
-            dd_fatal("First query for 'work' returned %i, second returned %i\n", work_query, work_dblchk[0]);
-        }
-        if (iwork_dblchk[0] != iwork_query) {
-            dd_fatal("First query for 'work' returned %i, second returned %i\n", work_query, work_dblchk[0]);
-        }
-        // check size for evals range
-        info = LAPACKE_dsyevr_work(
-                LAPACK_COL_MAJOR, // matrix_layout
-                DD_COMPUTE_EVECS, // jobz
-                DD_EVALS_INDEX_RANGE, // range
-                DD_UPPER_TRIANGULAR, // uplo
-                matrix->cols, // n
-                matrix->data, // a
-                matrix->rows, // lda
-                _vl_unused,
-                _vu_unused,
-                il,
-                iu,
-                abstol,
-                &m, //
-                eigenvalues->data,
-                eigenvectors->data,
-                eigenvectors->rows,
-                _isuppz_unused,
-                work_dblchk,
-                lwork_query,
-                iwork_dblchk,
-                liwork_query
-        );
-        if (work_dblchk[0] > work_query) {
-            dd_fatal("'work' for all evecs is %i, for some evecs is %i\n", work_query, work_dblchk[0]);
-        }
-        if (iwork_dblchk[0] > iwork_query) {
-            dd_fatal("'iwork' for all evecs is %i, for some evecs is %i\n", iwork_query, iwork_dblchk[0]);
-        }
-        free(work_dblchk);
-        free(iwork_dblchk);
-#endif
         (*workspace_ptrptr)->length = (MKL_INT)work_query;
         (*workspace_ptrptr)->data = (double*)mkl_malloc((*workspace_ptrptr)->length * sizeof(double), 64);
         if ((*workspace_ptrptr)->data == NULL) {
@@ -495,27 +445,27 @@ dd_status dd_mkl_syevr(/* in */ dd_Matrix *matrix,
 
     *time_elapsed = dd_timestamp();
     info = LAPACKE_dsyevr_work(
-        LAPACK_COL_MAJOR,
-        DD_COMPUTE_EVECS,
-        DD_EVALS_INDEX_RANGE, // range
-        DD_UPPER_TRIANGULAR,
-        matrix->cols,
-        matrix->data,
-        matrix->rows,
-        _vl_unused,
-        _vu_unused,
-        il,
-        iu,
-        abstol,
-        &m,
-        eigenvalues->data,
-        eigenvectors->data,
-        eigenvectors->rows,
-        _isuppz_unused,
-        workspace.data,
-        workspace.length,
-        intworkspace.data,
-        intworkspace.length
+        LAPACK_COL_MAJOR, // matrix_layout
+        DD_COMPUTE_EVECS, // jobz - just eigenvalues, or eigenvalues and eigenvectors?
+        DD_EVALS_INDEX_RANGE, // range - set to ALL just for the work query (upper bound)
+        DD_UPPER_TRIANGULAR, // uplo - upper or lower triangular (doesn't matter here)
+        matrix->cols, // n - columns of matrix
+        matrix->data, // a - data of matrix
+        matrix->rows, // lda - leading dimension of matrix (number of rows)
+        _vl_unused, // vl - lowest value of eigenvalue to find
+        _vu_unused, // vu - highest value of eigenvalue to find
+        il, // il - lowest index of eigenvalue to find
+        iu, // iu - highest index of eigenvalue to find
+        abstol, // abstol - converged eigenvalues lie in interval ABSTOL + EPS *   max( |a|,|b| ) 
+        &m, // m - number of eigenvalues found
+        eigenvalues->data, // w - eigenvalues (ascending)
+        eigenvectors->data, // z - eigenvectors array
+        eigenvectors->rows, // ldz - leading dimension of z
+        _isuppz_unused, // isuppz - support of eigenvectors (used when il = 1 and iu = matrix->cols, must be present)
+        workspace.data, // work - workspace array
+        workspace.length, // lwork - length of workspace array
+        intworkspace.data, // iwork - integer workspace array
+        intworkspace.length // liwork - length of integer workspace
     );
     if( info != 0 ) {
         dd_fatal("MKL dsyevr failed\n");
