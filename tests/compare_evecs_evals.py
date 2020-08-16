@@ -31,21 +31,34 @@ def compare_u(evecs_a, evecs_b, display=False):
     return np.allclose(evecs_b_mod, evecs_a)
 
 def main():
-    input_data_fn, c_cov_fn, c_evecs_fn, c_evals_fn = sys.argv[1:]
+    input_data_fn, c_cov_fn, c_evecs_fn, c_evals_fn, num_evecs_str = sys.argv[1:]
+    num_evecs = int(num_evecs_str)
     input_data = fits.getdata(input_data_fn)
     if len(input_data.shape) > 2:
         plane, row, col = input_data.shape
         input_data = input_data.reshape(plane, row * col)
     c_cov = fits.getdata(c_cov_fn)
+    assert c_cov.shape[0] >= num_evecs
     c_evecs = fits.getdata(c_evecs_fn)
+    assert c_evecs.shape[1] == num_evecs
     c_evals = fits.getdata(c_evals_fn)
+    assert c_evals.shape[0] == num_evecs
     np_cov = np.cov(input_data)
     np_evals, np_evecs = np.linalg.eigh(np_cov)
+    np_evecs = np_evecs[:,-num_evecs:]
+    np_evals = np_evals[-num_evecs:]
     try:
+        print('compare covariance matrices')
         assert np.allclose(c_cov, np_cov)
+        print('compare eigenvalues')
         assert np.allclose(c_evals, np_evals)
+        print('compare eigenvectors modulo sign')
         assert compare_u(c_evecs, np_evecs)
-    except AssertionError:
+        for i in range(num_evecs):
+            print(f'{i}: test that eigenvalue multiplication matches matrix-vector multiplication')
+            assert np.allclose(c_cov @ c_evecs[:,i] - c_evals[i] * c_evecs[:,i], 0)
+    except AssertionError as e:
+        print(e)
         compare_u(c_evecs, np_evecs, display=True)
         plt.savefig('compare_evecs.png')
         plt.clf()

@@ -19,7 +19,7 @@ TEST load_fits_image_float(void)
     {
         for (int col = 0; col < cols; col++)
         {
-            // printf("[row %i, col %i, idx %i] = %f \n", row, col, row * cols + col, image[row * cols + col]);
+            dd_debug("[row %i, col %i, idx %i] = %f \n", row, col, row * cols + col, image[row * cols + col]);
             ASSERT_EQ(row * cols + col, image[row * cols + col]);
         }
     }
@@ -41,7 +41,7 @@ TEST load_fits_image_int_conversion(void)
     {
         for (int col = 0; col < cols; col++)
         {
-            // printf("[row %i, col %i, idx %i] = %f \n", row, col, row * cols + col, image[row * cols + col]);
+            dd_debug("[row %i, col %i, idx %i] = %f \n", row, col, row * cols + col, image[row * cols + col]);
             ASSERT_EQ(row * cols + col, image[row * cols + col]);
         }
     }
@@ -121,19 +121,30 @@ TEST roundtrip_fits_cube(void)
 TEST make_transpose(void) {
     long rows = 3;
     long cols = 4;
+    // double row_major_mtx[3 * 4] = {
+    //     1, 1, 1, 1,
+    //     2, 2, 2, 2,
+    //     3, 3, 3, 3,
+    // };
+    // double col_major_mtx[4 * 3] = {
+    //     1, 2, 3,
+    //     1, 2, 3,
+    //     1, 2, 3,
+    //     1, 2, 3,
+    // };
     double row_major_mtx[3 * 4] = {
-        1, 1, 1, 1,
-        2, 2, 2, 2,
-        3, 3, 3, 3,
+        1, 2, 3, 4,
+        5, 6, 7, 8,
+        9, 10, 11, 12,
     };
     double col_major_mtx[4 * 3] = {
-        1, 2, 3,
-        1, 2, 3,
-        1, 2, 3,
-        1, 2, 3,
+        1, 5, 9,
+        2, 6, 10,
+        3, 7, 11,
+        4, 8, 12,
     };
     double *transpose;
-    dd_make_transpose(row_major_mtx, &transpose, cols, rows);
+    dd_convert_to_colmajor(row_major_mtx, &transpose, cols, rows);
     for (long idx = 0; idx < 12; idx++) {
         ASSERT_EQ(transpose[idx], col_major_mtx[idx]);
     }
@@ -142,7 +153,7 @@ TEST make_transpose(void) {
 
 TEST get_eigenvectors_mkl_syevr(void) {
     int N = 5;
-    int NSELECT = 3;
+    // int NSELECT = 3;
     int LDA = N;
     double a[5*5] = {
         0.67,  0.00,  0.00,  0.00,  0.00,
@@ -184,7 +195,7 @@ TEST get_eigenvectors_mkl_syevr(void) {
     );
     dd_sort_doubles(my_eigenvalues.data, my_eigenvalues.rows);
     ASSERT_EQm("dd_mkl_syevr didn't return dd_success", status, dd_success);
-    double x[2] = {1,2};
+    // double x[2] = {1,2};
     double known_eigenvalues[5] = {
         0.43302179880852787,
         2.144946655568288,
@@ -202,6 +213,85 @@ TEST get_eigenvectors_mkl_syevr(void) {
     ASSERT_EQm("dd_mkl_syevr didn't return dd_success", status, dd_success);
     ASSERT_EQm("Got new workspace on second invocation (not reusing!)", my_workspace, wptr);
     ASSERT_EQm("Got new intworkspace on second invocation (not reusing!)", my_intworkspace, iwptr);
+    PASS();
+}
+
+TEST get_eigenvector_range_mkl_syevr(void) {
+    int N = 5;
+    int LDA = N;
+    int number_evals = 3;
+    double a[5*5] = {
+        0.67,  0.00,  0.00,  0.00,  0.00,
+        -0.20,  3.82,  0.00,  0.00,  0.00,
+        0.19, -0.13,  3.27,  0.00,  0.00,
+        -1.06,  1.06,  0.11,  5.86,  0.00,
+        0.46, -0.48,  1.10, -0.98,  3.54
+    };
+    // three columns vectors, 5 entries per vector
+    double eigenvectors[3 * 5] = {
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+    };
+    double eigenvalues[5] = {0, 0, 0};
+    dd_Matrix my_matrix = {
+        .rows = N,
+        .cols = LDA,
+        .data = (double *)&a
+    };
+    dd_Matrix my_eigenvectors = {
+        .rows = N,
+        .cols = number_evals,
+        .data = (double *)&eigenvectors
+    };
+    dd_Matrix my_eigenvalues = {
+        .rows = 1,
+        .cols = number_evals,
+        .data = (double *)&eigenvalues
+    };
+    double duration;
+    dd_IntWorkspace *my_intworkspace = NULL;
+    dd_DoubleWorkspace *my_workspace = NULL;
+    dd_status status;
+    status = dd_mkl_syevr(
+        &my_matrix, &my_eigenvectors, &my_eigenvalues, &duration,
+        &my_workspace, &my_intworkspace
+    );
+    ASSERT_EQm("dd_mkl_syevr didn't return dd_success", status, dd_success);
+    double known_eigenvalues[3] = {
+        3.3680867378650334,
+        4.279153022898037,
+        6.934791784860096
+    };
+    double known_eigenvectors[3 * 5] = {
+        -0.08176685, -0.93380532, -0.07351991,  0.31294971, -0.13408617, // eval 3.36...
+        -0.01241397,  0.02572566, -0.70867609, -0.35413453, -0.60954985, // eval 4.27...
+        0.18243522, -0.35606835,  0.10215486, -0.84049795,  0.35079952, // eval 6.93...
+    };
+    ASSERTm("Eigenvalues don't match reference", dd_doubles_all_close(my_eigenvalues.data, known_eigenvalues, 5, 1e-13));
+    for (int i = 0; i < number_evals; i++) {
+        bool found = false;
+        int comparedto;
+        for (comparedto = 0; comparedto < number_evals; comparedto++) {
+            dd_debug("Comparing eigenvalue at position %i in result to %i in reference\n", i, comparedto);
+            dd_debug("%e ?= %e\n", my_eigenvalues.data[i], known_eigenvalues[comparedto]);
+            if (dd_doubles_close(my_eigenvalues.data[i], known_eigenvalues[comparedto], 1e-13)) {
+                dd_debug("breaking out");
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            FAILm("No match for eigenvalue returned by solver");
+        }
+        for (int j = 0; j < N; j++) {
+            double result_value = my_eigenvectors.data[i * my_eigenvectors.rows + j];
+            double reference_value = known_eigenvectors[comparedto * N + j];
+            dd_debug("Comparing Col %i (%i) Row %i: %e (%e)\n", i, comparedto, j, result_value, reference_value);
+            dd_debug("%e\n", result_value - reference_value);
+            ASSERT_EQm("Eigenvector entry does not match", dd_doubles_close(result_value, reference_value, 1e-8), true);
+        }
+    }
     PASS();
 }
 
@@ -277,9 +367,9 @@ TEST row_mean(void) {
         0.1, -0.1, 0, 0,
         0.1, -0.1, 0, 0,
     };
-    dd_subtract_mean_row(&my_matrix, &mean_sub_matrix, &column_means);
-    ASSERTm("Column mean values incorrect", dd_doubles_all_close(&column_means, &right_means, 3, 1e-8));
-    ASSERTm("Mean subtracted matrix incorrect", dd_doubles_all_close(mean_sub_matrix.data, &right_mean_sub, 3 * 4, 1e-8));
+    dd_subtract_mean_row(&my_matrix, &mean_sub_matrix, (double*)&column_means);
+    ASSERTm("Column mean values incorrect", dd_doubles_all_close((double*)&column_means, (double*)&right_means, 3, 1e-8));
+    ASSERTm("Mean subtracted matrix incorrect", dd_doubles_all_close(mean_sub_matrix.data, (double*)&right_mean_sub, 3 * 4, 1e-8));
     PASS();
 }
 
@@ -307,16 +397,16 @@ TEST column_mean(void) {
         .cols = cols,
         .data = (double *)&c
     };
-    double row_means[3] = {0, 0, 0, 0};
-    double right_means[3] = {1, 2, 3, 4};
+    double row_means[3] = {0, 0, 0};
+    double right_means[3] = {1, 2, 3};
     double right_mean_sub[3 * 4] = {
         0.1, 0.1, 0.1, 0.1,
         -0.1, -0.1, -0.1, -0.1,
         0.0, 0.0, 0.0, 0.0,
     };
-    dd_subtract_mean_column(&my_matrix, &mean_sub_matrix, &row_means);
-    ASSERTm("Row mean values incorrect", dd_doubles_all_close(&row_means, &right_means, 3, 1e-8));
-    ASSERTm("Mean subtracted matrix incorrect", dd_doubles_all_close(mean_sub_matrix.data, &right_mean_sub, 3 * 4, 1e-8));
+    dd_subtract_mean_column(&my_matrix, &mean_sub_matrix, (double*)&row_means);
+    ASSERTm("Row mean values incorrect", dd_doubles_all_close((double*)&row_means, (double*)&right_means, 3, 1e-8));
+    ASSERTm("Mean subtracted matrix incorrect", dd_doubles_all_close(mean_sub_matrix.data, (double*)&right_mean_sub, 3 * 4, 1e-8));
     PASS();
 }
 
@@ -353,7 +443,7 @@ TEST sample_covariance(void) {
          0.3889865 , -0.50992695, -0.22917832,  0.21448028
     };
     // dd_print_matrix(&cov_matrix);
-    ASSERTm("Sample covariance doesn't match reference", dd_doubles_all_close(cov_matrix.data, &ref, 4 * 4, 1e-8));
+    ASSERTm("Sample covariance doesn't match reference", dd_doubles_all_close(cov_matrix.data, (double*)&ref, 4 * 4, 1e-8));
     PASS();
 }
 
@@ -365,6 +455,7 @@ SUITE(suite)
     RUN_TEST(roundtrip_fits_cube);
     RUN_TEST(make_transpose);
     RUN_TEST(get_eigenvectors_mkl_syevr);
+    RUN_TEST(get_eigenvector_range_mkl_syevr);
     RUN_TEST(matrix_product);
     RUN_TEST(column_mean);
     RUN_TEST(row_mean);
